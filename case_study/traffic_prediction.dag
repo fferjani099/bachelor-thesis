@@ -1,0 +1,14 @@
+# Define all coms in DAG streaming.
+    module_config {
+    module_library : "/apollo/bazel-bin/cyber/case_study/lib_traffic_prediction.so"
+    components {
+        class_name : "traffic_prediction_component"
+        config {
+            name : "traffic_prediction"
+            readers {
+                channel: "/apollo/traffic_prediction"
+            }
+
+        }
+      }
+    }
