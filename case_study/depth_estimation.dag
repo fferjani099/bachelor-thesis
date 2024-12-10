@@ -1,0 +1,14 @@
+# Define all coms in DAG streaming.
+    module_config {
+    module_library : "/apollo/bazel-bin/cyber/case_study/lib_depth_estimation.so"
+    components {
+        class_name : "depth_estimation_component"
+        config {
+            name : "depth_estimation"
+            readers {
+                channel: "/apollo/depth_estimation"
+            }
+
+        }
+      }
+    }
