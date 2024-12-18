@@ -70,7 +70,7 @@ static void initialize_if_needed() {
 }
 
 static cudaStream_t get_or_create_thread_stream() {
-    pid_t tid = (pid_t) syscall(SYS_gettid); 
+    pid_t tid = (pid_t) syscall(SYS_gettid); // using the Linux TID
 
     {
         std::lock_guard<std::mutex> lk(g_map_mutex);
