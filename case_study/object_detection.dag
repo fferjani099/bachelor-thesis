@@ -1,12 +1,12 @@
 # Define all coms in DAG streaming.
     module_config {
-    module_library : "/apollo/bazel-bin/cyber/case_study/lib_object_tracking.so"
+    module_library : "/apollo/bazel-bin/cyber/examples/bachelor_thesis/case_study/lib_object_detection.so"
     components {
-        class_name : "object_tracking_component"
+        class_name : "object_detection_component"
         config {
-            name : "object_tracking"
+            name : "object_detection"
             readers {
-                channel: "/apollo/object_tracking"
+                channel: "/apollo/object_detection"
             }
 
         }
