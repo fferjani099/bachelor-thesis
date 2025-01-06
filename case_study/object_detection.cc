@@ -22,24 +22,7 @@ bool object_detection_component::Proc(const std::shared_ptr<Driver>& msg0) {
     static int i = 0;
     cv::Mat image;
 
-    switch (i % 4) {
-        case 0:
-            image = cv::imread("/apollo/cyber/examples/bachelor_thesis/case_study/test_images/0_green/0.png");
-            break;
-        case 1:
-            image = cv::imread("/apollo/cyber/examples/bachelor_thesis/case_study/test_images/1_red/0.jpg");
-            break;
-        case 2:
-            image = cv::imread("/apollo/cyber/examples/bachelor_thesis/case_study/test_images/2_yellow/0.jpg");
-            break;
-        case 3:
-            image = cv::imread("/apollo/cyber/examples/bachelor_thesis/case_study/test_images/3_off/0.png");
-            break;
-        default:
-            break;
-    }
-
-
+    image = cv::imread("/apollo/cyber/examples/bachelor_thesis/case_study/test_images/street_view.png");
     cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
     uchar* img = image.data;
 
