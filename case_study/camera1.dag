@@ -1,12 +1,10 @@
 module_config {
-    module_library : "/apollo/bazel-bin/cyber/examples/bachelor_thesis/case_study/lib_camera1.so"
-    timer_components {
-        class_name : "camera1_timer_component"
-        config {
-            name : "timer"
-            interval : 500
-
-        
-        }
+  module_library : "/apollo/bazel-bin/cyber/examples/bachelor_thesis/case_study/lib_camera1.so"
+  timer_components {
+    class_name : "camera1_timer_component"
+    config {
+      name : "camera1_timer"
+      interval : 500
     }
+  }
 }

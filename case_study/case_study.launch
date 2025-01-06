@@ -1,10 +1,11 @@
 <cyber>
     <module>
-        <name>timer</name>
-        <dag_conf>/apollo/cyber/case_study/camera1.dag</dag_conf>
-        <dag_conf>/apollo/cyber/case_study/camera2.dag</dag_conf>
-        <dag_conf>/apollo/cyber/case_study/object_detection.dag</dag_conf>
-        <dag_conf>/apollo/cyber/case_study/traffic_prediction.dag</dag_conf>
+        <name>case_study</name>
+        <!-- Each DAG file loaded within the same process_name "case_study" -->
+        <dag_conf>/apollo/cyber/examples/bachelor_thesis/case_study/camera1.dag</dag_conf>
+        <dag_conf>/apollo/cyber/examples/bachelor_thesis/case_study/camera2.dag</dag_conf>
+        <dag_conf>/apollo/cyber/examples/bachelor_thesis/case_study/object_detection.dag</dag_conf>
+        <dag_conf>/apollo/cyber/examples/bachelor_thesis/case_study/traffic_prediction.dag</dag_conf>
         <process_name>case_study</process_name>
     </module>
 </cyber>

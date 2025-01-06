@@ -1,53 +1,83 @@
 #include "cyber/examples/bachelor_thesis/case_study/object_detection.h"
 #include "torch/torch.h"
-#include "torch/script.h"
 #include "opencv2/opencv.hpp"
+#include <cuda_runtime.h>
+
 bool object_detection_component::Init() {
-  AINFO << "object_detection_component init";
+  AINFO << "[object_detection_component] Init start.";
+
   driver_writer_ = node_->CreateWriter<Driver>("/apollo/object_tracking");
-  return true;
+
+  try {
+    model_ = torch::jit::load("/apollo/cyber/examples/bachelor_thesis/case_study/resnet50_trace.pt");
+    model_.to(torch::kCUDA);
+    model_.eval();
+    model_loaded_ = true;
+    AINFO << "[object_detection_component] Model loaded successfully.";
+  } catch (const c10::Error& e) {
+    AERROR << "[object_detection_component] Error loading the model: " << e.what();
+    model_loaded_ = false;
+  }
+
+  return model_loaded_;
 }
 
 bool object_detection_component::Proc(const std::shared_ptr<Driver>& msg0) {
-    static int count = 0; 
-    static double total_gpu_time = 0.0;
+  if (!model_loaded_) {
+    AERROR << "[object_detection_component] Model not loaded. Skipping inference.";
+    return false;
+  }
 
-    if (count >= 100) {
-        double average_gpu_time = total_gpu_time / 100;
-        AINFO << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++";
-        AINFO << "Average GPU time for 100 inferences in chain 1: " << average_gpu_time << " ms";
-        AINFO << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++";
-        count = 0;
-    }
-    static int i = 0;
-    cv::Mat image;
+  cv::Mat image = cv::imread("/apollo/cyber/examples/bachelor_thesis/case_study/test_images/street_view.png");
+  if (image.empty()) {
+    AERROR << "[object_detection_component] Could not load /apollo/.../street_view.png";
+    return false;
+  }
+  cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
 
-    image = cv::imread("/apollo/cyber/examples/bachelor_thesis/case_study/test_images/street_view.png");
-    cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
-    uchar* img = image.data;
+  torch::NoGradGuard no_grad;
+  torch::Device device(torch::kCUDA);
+  torch::Tensor img_tensor = torch::from_blob(image.data, {1, image.rows, image.cols, 3}, torch::kByte).to(device);
+  img_tensor = img_tensor.permute({0, 3, 1, 2}).toType(torch::kFloat).div(255.0);
 
-    torch::Device device(torch::kCUDA);
-    torch::Tensor img_tensor = torch::from_blob(img, {1, image.rows, image.cols, 3}, torch::kByte).to(device);
-    img_tensor = img_tensor.permute({0, 3, 1, 2});
-    img_tensor = img_tensor.toType(torch::kFloat);
-    img_tensor = img_tensor.div(255.0);
-    
-    torch::jit::script::Module net = torch::jit::load("/apollo/cyber/examples/bachelor_thesis/case_study/resnet50_trace.pt");
-    net.to(device);
-    auto start_gpu = t1.MonoTime().ToSecond();
-    torch::NoGradGuard no_grad;
-    torch::Tensor output = net.forward({img_tensor}).toTensor();
-    
-    auto end_gpu = t1.MonoTime().ToSecond();
-    AINFO << "The GPU start time is " << start_gpu << "s and the end time is " << end_gpu << "s.";
-    double inference_time = (end_gpu - start_gpu) * 1000; 
-    AINFO << "The total time for model inference is " << inference_time << " ms.";
-    total_gpu_time += inference_time;
-    
-    auto out_msg = std::make_shared<Driver>();
-    out_msg->set_msg_id(i++);
-    out_msg->set_timestamp(msg0->timestamp());
-    driver_writer_->Write(out_msg);
-    count++;
-    return true;
+  // -----------------------------------------------------------------------------------
+  // Measure GPU time with CUDA events
+  // -----------------------------------------------------------------------------------
+  cudaEvent_t start, end;
+  cudaEventCreate(&start);
+  cudaEventCreate(&end);
+
+  cudaEventRecord(start, 0);
+  auto outputs = model_.forward({img_tensor}).toTensor();
+  cudaEventRecord(end, 0);
+  cudaEventSynchronize(end);
+
+  float inference_time_ms = 0.0f;
+  cudaEventElapsedTime(&inference_time_ms, start, end);
+
+  cudaEventDestroy(start);
+  cudaEventDestroy(end);
+
+  inference_count_++;
+  total_gpu_time_ms_ += inference_time_ms;
+
+  if (inference_count_ == 100) {
+    double avg_time = total_gpu_time_ms_ / 100.0;
+    AINFO << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++";
+    AINFO << "[Chain1 - Object Detection] Average GPU time over 100 inferences: "
+          << avg_time << " ms";
+    AINFO << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++";
+    inference_count_ = 0;
+    total_gpu_time_ms_ = 0.0;
+  }
+
+  AINFO << "[Chain1 - Object Detection] Single inference took ~"
+        << inference_time_ms << " ms (GPU). Timestamp from camera1: "
+        << msg0->timestamp();
+
+  auto out_msg = std::make_shared<Driver>();
+  out_msg->set_msg_id(msg0->msg_id());
+  out_msg->set_timestamp(msg0->timestamp());
+
+  return true;
 }
