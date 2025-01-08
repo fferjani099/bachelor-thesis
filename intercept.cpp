@@ -2,76 +2,192 @@
 #include <cuda_runtime_api.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+
+#include <atomic>
 #include <map>
 #include <mutex>
-#include <thread>
 #include <sstream>
+#include <thread>
 
 #include <libsmctrl.h>
 
-// This library intercepts CUDA runtime calls (like cudaLaunchKernel).
-// We'll create new CUDA streams per thread and assign masks to them.
+/**
+ * This library intercepts CUDA runtime calls (like cudaLaunchKernel).
+ * We create new CUDA streams for each Linux thread, and apply TPC-masking
+ * so that each thread's GPU kernels only run on a distinct subset of TPCs.
+ *
+ * Usage:
+ *   - Build as a shared library (e.g. `intercept.so`).
+ *   - Preload it in the environment:
+ *       LD_PRELOAD=/path/to/intercept.so ...
+ *   - It intercepts all calls to cudaLaunchKernel in the application.
+ *   - Each distinct TID that invokes a kernel will get a unique TPC subset.
+ */
 
+// ---------------------------------------------------------------------
+// Global / static variables
+// ---------------------------------------------------------------------
 
 static bool g_initialized = false;
 static std::mutex g_init_mutex;
+
+// Points to the true/original cudaLaunchKernel
+static cudaError_t (*original_cudaLaunchKernel)(
+    const void* func,
+    dim3 gridDim,
+    dim3 blockDim,
+    void** args,
+    size_t sharedMem,
+    cudaStream_t stream) = nullptr;
+
+// We map each TID -> dedicated CUDA stream
+static std::map<pid_t, cudaStream_t> g_thread_stream_map;
 static std::mutex g_map_mutex;
 
-// Map thread_id to cudaStream_t
-static std::map<pid_t, cudaStream_t> g_thread_stream_map;
-
-// The original cudaLaunchKernel function pointer
-static cudaError_t (*original_cudaLaunchKernel)(
-  const void *func,
-  dim3 gridDim,
-  dim3 blockDim,
-  void **args,
-  size_t sharedMem,
-  cudaStream_t stream) = nullptr;
-
-// Device info
+// Number of TPCs on the device
 static uint32_t g_num_tpcs = 0;
 
-// Global and per-stream mask (for demonstration, we can pick a simple mask)
-static uint64_t g_global_mask = 0; 
-// For example, if we have 8 TPCs and we want to enable all except one:
-// g_global_mask = 0x02 would disable TPC #1 (assuming bit 0 = TPC0).
- 
+// Number of distinct partitions we want to form. For example: 2 or 4.
+static uint32_t g_num_groups = 2;  // adjust as needed
+
+// Atomic counter to assign group indices to newly seen threads
+static std::atomic<uint32_t> g_next_group_index{0};
+
+// ---------------------------------------------------------------------
+// Initialization
+// ---------------------------------------------------------------------
 
 static void initialize_if_needed() {
     std::lock_guard<std::mutex> lk(g_init_mutex);
-    if (g_initialized) return;
+    if (g_initialized) {
+        return;
+    }
 
-    original_cudaLaunchKernel = (cudaError_t(*)(const void*, dim3, dim3, void**, size_t, cudaStream_t))
-        dlsym(RTLD_NEXT, "cudaLaunchKernel");
+    // Resolve the original symbol for cudaLaunchKernel
+    original_cudaLaunchKernel = reinterpret_cast<cudaError_t(*)(const void*, dim3, dim3, void**, size_t, cudaStream_t)>(
+        dlsym(RTLD_NEXT, "cudaLaunchKernel")
+    );
+
     if (!original_cudaLaunchKernel) {
-        fprintf(stderr, "[gpu_intercept] Error: Unable to find original cudaLaunchKernel.\n");
+        fprintf(stderr, "[gpu_intercept] ERROR: Unable to find original cudaLaunchKernel.\n");
         _exit(1);
     }
 
-    // Initialize libsmctrl: Obtain device info
-    int dev = 0; // Assuming default device 0
-    cudaSetDevice(dev);
+    // Initialize the device and libsmctrl
+    int dev = 0;
+    cudaError_t cerr = cudaSetDevice(dev);
+    if (cerr != cudaSuccess) {
+        fprintf(stderr, "[gpu_intercept] ERROR: cudaSetDevice(dev=%d) failed.\n", dev);
+        _exit(1);
+    }
 
+    // Query how many TPCs exist on this device
     libsmctrl_get_tpc_info(&g_num_tpcs, dev);
+    fprintf(stdout, "[gpu_intercept] Device %d has %u TPC(s)\n", dev, g_num_tpcs);
 
-    // we recommend disabling most TPCs by default. 
-    // CUDA may implicitly launch internal kernels to support some API calls and, if no default mask is set, those calls may interfere with the partitions
+    // We recommend disabling most TPCs by default. 
+    // CUDA may implicitly launch internal kernels to support some API calls
+    // if no default mask is set those calls may interfere with the partitions
     // Allow work to only use TPC 1 by default
-    libsmctrl_set_global_mask(~0x1ull);
+    uint64_t global_mask = 0x1ull; 
+    libsmctrl_set_global_mask(~global_mask);
     // It is possible to disable all TPCs by default (with a mask of ~0ull)
     // but we recommend against this, as it causes kernels launched with the default TPC mask to hang indefinitely (including CUDA-internal ones)
 
+    // 4. Mark initialization done
     g_initialized = true;
-    fprintf(stdout, "[gpu_intercept] Initialization complete. Total TPCs: %u\n", g_num_tpcs);
+    fprintf(stdout, "[gpu_intercept] Initialization complete. \n");
 }
 
-static cudaStream_t get_or_create_thread_stream() {
-    pid_t tid = (pid_t) syscall(SYS_gettid); // using the Linux TID
+// ---------------------------------------------------------------------
+// Building a bitmask for the TPC subset
+//  - If start_tpc <= end_tpc < g_num_tpcs, set bits [start_tpc..end_tpc]
+// ---------------------------------------------------------------------
+static uint64_t build_tpc_mask(uint32_t start_tpc, uint32_t end_tpc) {
+    uint64_t mask = 0ULL;
+    if (start_tpc > end_tpc || start_tpc >= 64) {
+        // no valid range or beyond 64 bits
+        return mask;
+    }
+    // end_tpc must be <= 63 for 64-bit mask. We'll clamp if needed
+    if (end_tpc >= 64) {
+        end_tpc = 63;
+    }
+    for (uint32_t t = start_tpc; t <= end_tpc; t++) {
+        mask |= (1ULL << t);
+    }
+    return mask;
+}
 
+// ---------------------------------------------------------------------
+// Assign a group index to a TID and build an appropriate mask
+// ---------------------------------------------------------------------
+static uint64_t compute_mask_for_tid(pid_t tid) {
+    // We'll do round-robin assignment:
+    //    group_index = (g_next_group_index++) % g_num_groups
+    // Then we compute how many TPCs belong in each group.
+
+    // The simplest approach is to do "uniform" distribution of TPCs among groups.
+    // E.g. if we have 32 TPCs and 2 groups => each group gets 16 TPCs
+    // If not divisible, the last group can get remainder.
+
+    uint32_t group_index = g_next_group_index.fetch_add(1, std::memory_order_relaxed) % g_num_groups;
+    if (g_num_tpcs == 0) {
+        return 0ULL;  // no TPCs? no bits
+    }
+
+    // integer division: each group has at least base_count TPCs
+    uint32_t base_count = g_num_tpcs / g_num_groups;
+    // remainder TPCs distributed across the first (g_num_tpcs % g_num_groups) groups
+    uint32_t remainder = g_num_tpcs % g_num_groups;
+
+    // We'll compute how many TPCs come before this group in the assignment
+    // and how many TPCs are assigned to this group
+    uint32_t start = 0, count = 0;
+
+    for (uint32_t g = 0; g < g_num_groups; g++) {
+        uint32_t extra = (g < remainder) ? 1U : 0U; 
+        uint32_t group_size = base_count + extra;
+        if (g == group_index) {
+            // found our group
+            count = group_size;
+            break;
+        }
+        // else move start by group_size
+        start += group_size;
+    }
+
+    if (count == 0) {
+        // means maybe we had 0 TPC or something
+        return 0ULL;
+    }
+
+    uint32_t end = start + count - 1;
+    if (end >= g_num_tpcs) {
+        end = g_num_tpcs - 1;
+    }
+
+    // build bitmask
+    uint64_t mask = build_tpc_mask(start, end);
+
+    fprintf(stdout,
+            "[gpu_intercept] TID=%d assigned group_index=%u => TPC range [%u..%u], mask=0x%lx\n",
+            tid, group_index, start, end, mask);
+    return mask;
+}
+
+// ---------------------------------------------------------------------
+// Get or create a dedicated CUDA stream for the calling TID
+// ---------------------------------------------------------------------
+static cudaStream_t get_or_create_thread_stream() {
+    pid_t tid = static_cast<pid_t>(syscall(SYS_gettid));
+
+    // First check if we already have a stream
     {
         std::lock_guard<std::mutex> lk(g_map_mutex);
         auto it = g_thread_stream_map.find(tid);
@@ -80,40 +196,18 @@ static cudaStream_t get_or_create_thread_stream() {
         }
     }
 
+    // If not found, create a new stream
     cudaStream_t new_stream;
     cudaError_t err = cudaStreamCreate(&new_stream);
     if (err != cudaSuccess) {
-        fprintf(stderr, "[gpu_intercept] Failed to create CUDA stream for thread %d\n", tid);
+        fprintf(stderr, "[gpu_intercept] ERROR: cudaStreamCreate() failed for TID=%d\n", tid);
         _exit(1);
     }
 
-    // Let's pick a group size of 10 TPCs per Task.
-    const uint32_t group_size = 10;
-    if (g_num_tpcs < group_size) {
-        fprintf(stderr, "[gpu_intercept] Warning: fewer than 10 TPCs available, using all.\n");
-        // Just use all TPCs if we don't have enough.
-        // mask: bits set for all TPCs
-        uint64_t stream_mask = (g_num_tpcs >= 64) ? (uint64_t)-1 : ((1ULL << g_num_tpcs) - 1);
-        libsmctrl_set_stream_mask(new_stream, stream_mask);
-        std::lock_guard<std::mutex> lk(g_map_mutex);
-        g_thread_stream_map[tid] = new_stream;
-        fprintf(stdout, "[gpu_intercept] Created stream %p for thread %d with mask 0x%lx\n", 
-                (void*)new_stream, tid, stream_mask);
-        return new_stream;
-    }
+    // Compute a TPC mask for this TID
+    uint64_t stream_mask = compute_mask_for_tid(tid);
 
-    uint32_t num_groups = g_num_tpcs / group_size;
-    if (num_groups == 0) num_groups = 1; // Fallback if less than 10 TPCs.
-
-    uint32_t group_index = (uint32_t)(tid % num_groups);
-
-    // Calculate the mask for this group
-    // Example: if group_index = 1 and group_size = 10, 
-    // TPCs [10..19] are enabled.
-    uint64_t stream_mask = ((1ULL << group_size) - 1) << (group_index * group_size);
-    // Make sure we don't shift beyond the number of TPCs if not perfectly divisible
-    stream_mask &= (g_num_tpcs >= 64) ? (uint64_t)-1 : ((1ULL << g_num_tpcs) - 1);
-
+    // Apply this mask to the new stream
     libsmctrl_set_stream_mask(new_stream, stream_mask);
 
     {
@@ -121,44 +215,54 @@ static cudaStream_t get_or_create_thread_stream() {
         g_thread_stream_map[tid] = new_stream;
     }
 
-    fprintf(stdout, "[gpu_intercept] Created stream %p for thread %d with mask 0x%lx (TPC group %u)\n", 
-            (void*)new_stream, tid, stream_mask, group_index);
+    fprintf(stdout,
+            "[gpu_intercept] Created new stream=%p for TID=%d with mask=0x%lx\n",
+            (void*)new_stream, tid, stream_mask);
 
     return new_stream;
 }
 
-
-extern "C" cudaError_t cudaLaunchKernel(
-    const void *func,
+// ---------------------------------------------------------------------
+// Intercepted cudaLaunchKernel
+// We override the user-specified stream with our own partitioned stream
+// ---------------------------------------------------------------------
+extern "C"
+cudaError_t cudaLaunchKernel(
+    const void* func,
     dim3 gridDim,
     dim3 blockDim,
-    void **args,
+    void** args,
     size_t sharedMem,
     cudaStream_t stream)
 {
+    // Make sure we're set up
     initialize_if_needed();
-    stream = get_or_create_thread_stream();
 
-    return original_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream);
+    // Retrieve or create the thread’s dedicated stream
+    cudaStream_t my_stream = get_or_create_thread_stream();
+
+    // Force the kernel to launch on our partitioned stream
+    return original_cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, my_stream);
 }
 
-
-// ============================================================================
+// ---------------------------------------------------------------------
 // Library constructor and destructor
-// ============================================================================
+// ---------------------------------------------------------------------
 __attribute__((constructor))
 static void lib_init() {
-    // We do lazy init in initialize_if_needed(), so nothing here, but we could.
-    // This is called when the shared library is loaded.
+    // Called when the shared library is loaded.
+    // We do lazy initialization in the interceptor, so nothing special here.
 }
 
 __attribute__((destructor))
 static void lib_fini() {
-    // Cleanup if needed.
-    // Destroy streams, etc.
-    for (auto &kv : g_thread_stream_map) {
-        cudaStreamDestroy(kv.second);
+    // Cleanup on library unload. Destroy all streams, etc.
+    {
+        std::lock_guard<std::mutex> lk(g_map_mutex);
+        for (auto &kv : g_thread_stream_map) {
+            cudaStreamDestroy(kv.second);
+        }
+        g_thread_stream_map.clear();
     }
-    g_thread_stream_map.clear();
-    fprintf(stdout, "[gpu_intercept] Library shutdown.\n");
+    fprintf(stdout, "[gpu_intercept] Library shutdown complete.\n");
 }
