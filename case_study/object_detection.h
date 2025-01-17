@@ -28,6 +28,7 @@ class object_detection_component : public Component<Driver> {
 
   int inference_count_ = 0;
   double total_gpu_time_ms_ = 0.0;
+  int skip_count_ = 1;
 };
 
 CYBER_REGISTER_COMPONENT(object_detection_component)

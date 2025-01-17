@@ -88,18 +88,15 @@ static void initialize_if_needed() {
 
     // Query how many TPCs exist on this device
     libsmctrl_get_tpc_info(&g_num_tpcs, dev);
+    //g_num_tpcs = 60; 
     fprintf(stdout, "[gpu_intercept] Device %d has %u TPC(s)\n", dev, g_num_tpcs);
 
-    // We recommend disabling most TPCs by default. 
-    // CUDA may implicitly launch internal kernels to support some API calls
-    // if no default mask is set those calls may interfere with the partitions
-    // Allow work to only use TPC 1 by default
-    uint64_t global_mask = 0x1ull; 
-    libsmctrl_set_global_mask(~global_mask);
-    // It is possible to disable all TPCs by default (with a mask of ~0ull)
-    // but we recommend against this, as it causes kernels launched with the default TPC mask to hang indefinitely (including CUDA-internal ones)
+    // set a global mask
+    // we disable none by default => global_mask = 0, i.e. no TPCs are disabled
+    uint64_t global_mask = 0x0ULL; 
+    libsmctrl_set_global_mask(global_mask);
 
-    // 4. Mark initialization done
+    // Mark initialization done
     g_initialized = true;
     fprintf(stdout, "[gpu_intercept] Initialization complete. \n");
 }
@@ -121,7 +118,7 @@ static uint64_t build_tpc_mask(uint32_t start_tpc, uint32_t end_tpc) {
     for (uint32_t t = start_tpc; t <= end_tpc; t++) {
         mask |= (1ULL << t);
     }
-    return mask;
+    return ~mask;
 }
 
 // ---------------------------------------------------------------------

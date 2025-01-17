@@ -40,9 +40,7 @@ bool object_detection_component::Proc(const std::shared_ptr<Driver>& msg0) {
   torch::Tensor img_tensor = torch::from_blob(image.data, {1, image.rows, image.cols, 3}, torch::kByte).to(device);
   img_tensor = img_tensor.permute({0, 3, 1, 2}).toType(torch::kFloat).div(255.0);
 
-  // -----------------------------------------------------------------------------------
   // Measure GPU time with CUDA events
-  // -----------------------------------------------------------------------------------
   cudaEvent_t start, end;
   cudaEventCreate(&start);
   cudaEventCreate(&end);
@@ -57,6 +55,13 @@ bool object_detection_component::Proc(const std::shared_ptr<Driver>& msg0) {
 
   cudaEventDestroy(start);
   cudaEventDestroy(end);
+
+  if (skip_count_ > 0) {
+    skip_count_--;
+    AINFO << "[Chain1 - Object Detection] First inference (or warm-up) took ~"
+          << inference_time_ms << " ms (GPU). Not counting towards average.";
+    return true;
+  }
 
   inference_count_++;
   total_gpu_time_ms_ += inference_time_ms;

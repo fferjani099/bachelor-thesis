@@ -68,7 +68,8 @@ cc_library(
         "//cyber",
         "//cyber/examples/proto:examples_cc_proto",
         "@libtorch_gpu",                      
-        "@local_config_cuda//cuda:cudart",    
+        "@local_config_cuda//cuda:cudart",  
+        "@local_config_cuda//cuda:cuda_headers",  
         "@opencv//:imgcodecs",         
     ],
 )
@@ -94,6 +95,7 @@ cc_library(
         "//cyber/examples/proto:examples_cc_proto",
         "@libtorch_gpu",
         "@local_config_cuda//cuda:cudart",
+        "@local_config_cuda//cuda:cuda_headers",
         "@opencv//:imgcodecs",
     ],
 )

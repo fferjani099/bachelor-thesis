@@ -54,6 +54,13 @@ bool traffic_prediction_component::Proc(const std::shared_ptr<Driver>& msg0) {
   cudaEventDestroy(start);
   cudaEventDestroy(end);
 
+  if (skip_count_ > 0) {
+    skip_count_--;
+    AINFO << "[Chain1 - Object Detection] First inference (or warm-up) took ~"
+          << inference_time_ms << " ms (GPU). Not counting towards average.";
+    return true;
+  }
+
   inference_count_++;
   total_gpu_time_ms_ += inference_time_ms;
 

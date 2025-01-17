@@ -1,6 +1,6 @@
 CC = gcc
 CXX = g++
-NVCC ?= /usr/local/cuda-12.2/bin/nvcc
+NVCC ?= /usr/local/cuda-11.1/bin/nvcc
 # -fPIC is needed in all cases, as we may be linked into another shared library
 CFLAGS = -fPIC
 LDFLAGS = -lcuda -I/usr/local/cuda/include -ldl
