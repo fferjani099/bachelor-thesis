@@ -50,7 +50,7 @@ static std::map<pid_t, cudaStream_t> g_thread_stream_map;
 static std::mutex g_map_mutex;
 
 // Number of TPCs on the device
-static uint32_t g_num_tpcs = 0;
+static uint32_t g_num_tpcs = 2;
 
 // Number of distinct partitions we want to form. For example: 2 or 4.
 static uint32_t g_num_groups = 2;  // adjust as needed
@@ -87,8 +87,7 @@ static void initialize_if_needed() {
     }
 
     // Query how many TPCs exist on this device
-    libsmctrl_get_tpc_info(&g_num_tpcs, dev);
-    //g_num_tpcs = 60; 
+    //libsmctrl_get_tpc_info(&g_num_tpcs, dev);
     fprintf(stdout, "[gpu_intercept] Device %d has %u TPC(s)\n", dev, g_num_tpcs);
 
     // set a global mask
@@ -135,7 +134,7 @@ static uint64_t compute_mask_for_tid(pid_t tid) {
 
     uint32_t group_index = g_next_group_index.fetch_add(1, std::memory_order_relaxed) % g_num_groups;
     if (g_num_tpcs == 0) {
-        return 0ULL;  // no TPCs? no bits
+        return 0ULL;
     }
 
     // integer division: each group has at least base_count TPCs

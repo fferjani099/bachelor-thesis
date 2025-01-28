@@ -6,7 +6,7 @@
 bool traffic_prediction_component::Init() {
   AINFO << "[traffic_prediction_component] Init start.";
   try {
-    model_ = torch::jit::load("/apollo/cyber/examples/bachelor_thesis/case_study/resnet50_trace.pt");
+    model_ = torch::jit::load("/apollo/cyber/examples/bachelor_thesis/case_study/resnet50_malfunction_trace_10.pt");
     model_.to(torch::kCUDA);
     model_.eval();
     model_loaded_ = true;
