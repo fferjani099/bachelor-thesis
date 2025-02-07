@@ -101,6 +101,42 @@ cc_library(
 )
 
 ########################
+# GPU monitor
+########################
+
+cc_binary(
+    name = "lib_gpu_monitor_component.so",
+    linkshared = True,
+    linkstatic = True,
+    deps = [
+        ":gpu_monitor_component_lib",
+    ],
+    linkopts = [
+        "-L/usr/lib/x86_64-linux-gnu",
+        "-lnvidia-ml",
+    ],
+)
+
+cc_library(
+    name = "gpu_monitor_component_lib",
+    srcs = [
+        "gpu_monitor_component.cc",
+    ],
+    hdrs = [
+        "gpu_monitor_component.h",
+    ],
+    deps = [
+        "//cyber",
+    ],
+    copts = [
+        "-I/usr/local/cuda-11.1/targets/x86_64-linux/include"
+    ],
+    alwayslink = True,
+    visibility = ["//visibility:private"],
+)
+
+
+########################
 # Filegroup / install
 ########################
 filegroup(
