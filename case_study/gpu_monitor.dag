@@ -1,0 +1,10 @@
+module_config {
+  module_library : "/apollo/bazel-bin/cyber/examples/bachelor_thesis/case_study/lib_gpu_monitor_component.so"
+  timer_components {
+    class_name : "GpuMonitorComponent"
+    config {
+      name : "gpu_monitor"
+      interval : 200
+    }
+  }
+}
