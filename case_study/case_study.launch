@@ -6,6 +6,7 @@
         <dag_conf>/apollo/cyber/examples/bachelor_thesis/case_study/camera2.dag</dag_conf>
         <dag_conf>/apollo/cyber/examples/bachelor_thesis/case_study/object_detection.dag</dag_conf>
         <dag_conf>/apollo/cyber/examples/bachelor_thesis/case_study/traffic_prediction.dag</dag_conf>
+        <dag_conf>/apollo/cyber/examples/bachelor_thesis/case_study/gpu_monitor.dag</dag_conf>
         <process_name>case_study</process_name>
     </module>
 </cyber>

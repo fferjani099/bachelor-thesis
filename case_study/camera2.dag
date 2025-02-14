@@ -4,7 +4,7 @@ module_config {
     class_name : "camera2_timer_component"
     config {
       name : "camera2_timer"
-      interval : 100
+      interval : 500
     }
   }
 }
