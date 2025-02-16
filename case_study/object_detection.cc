@@ -77,8 +77,7 @@ bool object_detection_component::Proc(const std::shared_ptr<Driver>& msg0) {
   }
 
   AINFO << "[Chain1 - Object Detection] Single inference took ~"
-        << inference_time_ms << " ms (GPU). Timestamp from camera1: "
-        << msg0->timestamp();
+        << inference_time_ms << " ms (GPU).";
 
   auto out_msg = std::make_shared<Driver>();
   out_msg->set_msg_id(msg0->msg_id());

@@ -74,10 +74,9 @@ bool traffic_prediction_component::Proc(const std::shared_ptr<Driver>& msg0) {
     total_gpu_time_ms_ = 0.0;
   }
 
-  const double end_time = apollo::cyber::Time::MonoTime().ToSecond();
+  // const double end_time = apollo::cyber::Time::MonoTime().ToSecond();
   AINFO << "[Chain2 - Traffic Prediction] Single inference took ~"
-        << inference_time_ms << " ms (GPU). Camera2 timestamp: "
-        << msg0->timestamp() << ", end time: " << end_time << "s";
+        << inference_time_ms << " ms (GPU).";
 
   return true;
 }
